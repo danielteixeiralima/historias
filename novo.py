@@ -615,7 +615,8 @@ Agradecemos profundamente a todos que contribuíram para este projeto inovador e
     return html_content
 
 # Função para gerar o PDF a partir de HTML
-def gerar_pdf_livro(titulo_capa, historias, imagens_base64, historia_texto, estilo_imagem, nome_pdf, logo_base64):
+# Função para gerar o PDF a partir de HTML
+def gerar_pdf_livro(titulo_capa, historias, imagens_base64, historia_texto, estilo_imagem, nome_pdf, logo_base64, pasta_destino):
     logging.info("Gerando o conteúdo HTML completo...")
     css = """
     <style>
@@ -729,11 +730,12 @@ def gerar_pdf_livro(titulo_capa, historias, imagens_base64, historia_texto, esti
             'zoom': '1.0',
             'no-outline': None
         }
-        caminho_pdf = os.path.join(PASTA_PDFS, nome_pdf)
+        caminho_pdf = os.path.join(pasta_destino, nome_pdf)
         pdfkit.from_string(html_completo, caminho_pdf, configuration=config, options=options)
-        logging.info(f"PDF '{nome_pdf}' gerado com sucesso na pasta '{PASTA_PDFS}'!")
+        logging.info(f"PDF '{nome_pdf}' gerado com sucesso na pasta '{pasta_destino}'!")
     except Exception as e:
         logging.error(f"Erro ao gerar o PDF: {e}")
+
 
 # Função para quebrar a história em partes
 def quebrar_historia_em_partes(historia_texto, num_partes=14):
@@ -792,7 +794,7 @@ def formatar_como_livro_infantil(arquivo_word=None, preferencias=None, interesse
 
         titulo, estilo_imagem = gerar_titulo_descricao_estilo(historia_texto)
         titulo_sanitizado = sanitizar_nome_arquivo(titulo)
-        nome_pdf = f"{titulo_sanitizado}.pdf"
+        nome_pdf = os.path.basename(arquivo_word).replace('.docx', '.pdf')
         partes_historia = quebrar_historia_em_partes(historia_texto, num_partes=14)
         imagens_base64 = []
 
@@ -890,61 +892,100 @@ def formatar_como_livro_infantil(arquivo_word=None, preferencias=None, interesse
                 imagens_base64[idx] = gerar_imagem_placeholder()
 
         # Gerar PDF do livro
-        gerar_pdf_livro(titulo, partes_historia, imagens_base64, historia_texto, estilo_imagem, nome_pdf, logo_base64)
-
+        gerar_pdf_livro(
+            titulo_capa=titulo,
+            historias=partes_historia,
+            imagens_base64=imagens_base64,
+            historia_texto=" ".join(partes_historia),
+            estilo_imagem=estilo_imagem,
+            nome_pdf=nome_pdf,
+            logo_base64=logo_base64,
+            pasta_destino=os.path.dirname(arquivo_word)  # Passa a pasta do arquivo original
+        )
         return titulo, partes_historia, imagens_base64
     except Exception as e:
         logging.error(f"Erro ao formatar o livro infantil: {e}")
         return None, None, None
 
-def processar_arquivos_na_pasta(pasta='.'):
-    logging.info(f"Processando todos os arquivos na pasta: {pasta}")
-    for arquivo in os.listdir(pasta):
-        if arquivo.endswith('.docx'):
-            caminho_completo = os.path.join(pasta, arquivo)
-            nome_arquivo = os.path.basename(caminho_completo)
+def processar_arquivos_na_pasta(origem, destino):
+    pasta_historias = origem
+    pasta_pdfs = destino
 
-            # Verificar o progresso
-            status = progresso.get(nome_arquivo, 'pendente')
-            if status == 'concluído':
-                logging.info(f"Arquivo '{nome_arquivo}' já processado. Pulando para o próximo.")
-                continue
-            elif status == 'em_progresso':
-                logging.info(f"Retomando processamento do arquivo '{nome_arquivo}'.")
-            else:
-                logging.info(f"Iniciando processamento do arquivo '{nome_arquivo}'.")
+    print("Iniciando processamento de arquivos...")
+    try:
+        turmas_historias = os.listdir(pasta_historias)
+    except Exception as e:
+        logging.error(f"Erro ao listar as turmas em {pasta_historias}: {e}")
+        return
 
-            # Atualizar status para 'em_progresso'
-            progresso[nome_arquivo] = 'em_progresso'
-            salvar_progresso(progresso)
+    for turma in turmas_historias:
+        caminho_turma_historias = os.path.join(pasta_historias, turma)
+        if not os.path.isdir(caminho_turma_historias):
+            continue
 
-            try:
-                # Processar o arquivo Word
-                titulo, partes_historia, imagens_base64 = formatar_como_livro_infantil(arquivo_word=caminho_completo)
+        try:
+            arquivos = os.listdir(caminho_turma_historias)
+        except Exception as e:
+            logging.error(f"Erro ao listar arquivos na turma {turma}: {e}")
+            continue
 
-                if titulo:
-                    logging.info(f"Livro '{titulo}' processado com sucesso. PDF gerado.")
-                    progresso[nome_arquivo] = 'concluído'
-                else:
-                    logging.error(f"Falha ao processar o arquivo '{arquivo}'.")
-                    progresso[nome_arquivo] = 'erro'
+        for arquivo in arquivos:
+            if arquivo.endswith('.docx'):
+                caminho_completo_docx = os.path.join(caminho_turma_historias, arquivo)
+                nome_arquivo = os.path.splitext(arquivo)[0]
+                nome_pdf = f"{nome_arquivo}.pdf"
 
-                # Salvar progresso após cada arquivo
-                salvar_progresso(progresso)
+                # Criar a pasta da turma em `pdfs_gerados` se não existir
+                caminho_turma_pdfs = os.path.join(pasta_pdfs, turma)
+                if not os.path.exists(caminho_turma_pdfs):
+                    try:
+                        os.makedirs(caminho_turma_pdfs)
+                    except Exception as e:
+                        logging.error(f"Erro ao criar a pasta {caminho_turma_pdfs}: {e}")
+                        continue
 
-            except Exception as e:
-                logging.error(f"Erro ao processar o arquivo '{arquivo}': {e}")
-                progresso[nome_arquivo] = 'erro'
-                salvar_progresso(progresso)
+                # Caminho final para o PDF
+                caminho_pdf = os.path.join(caminho_turma_pdfs, nome_pdf)
+
+                # Verificar se o PDF já existe
+                if os.path.exists(caminho_pdf):
+                    logging.info(f"O PDF '{nome_pdf}' já existe. Pulando o arquivo.")
+                    continue
+
+                # Processar o arquivo Word e gerar o PDF
+                try:
+                    logging.info(f"Processando o arquivo '{arquivo}' para a turma '{turma}'.")
+                    # Chama a função sem passar caminho_pdf diretamente
+                    titulo, partes_historia, imagens_base64 = formatar_como_livro_infantil(
+                        arquivo_word=caminho_completo_docx
+                    )
+
+                    # Depois de processar, move o PDF gerado para o destino correto
+                    pdf_gerado = os.path.join(os.path.dirname(caminho_completo_docx), f"{nome_arquivo}.pdf")
+                    if os.path.exists(pdf_gerado):
+                        os.rename(pdf_gerado, caminho_pdf)
+                        logging.info(f"PDF movido para: {caminho_pdf}")
+                    else:
+                        logging.error(f"PDF '{nome_pdf}' não foi encontrado após processamento.")
+                except Exception as e:
+                    logging.error(f"Erro ao processar o arquivo '{arquivo}': {e}")
+
+    logging.info("Processamento de todos os arquivos Word concluído.")
+
+
+
+
+
 
 # Função principal
 if __name__ == "__main__":
     # Caminho para a pasta contendo os arquivos Word
-    caminho_pasta = '.'
+    caminho_pasta = 'C:\\Users\\User\\Downloads\\historias'
+    caminho_destino = "C:\\Users\\User\\Downloads\\livros\\pdfs_gerados"
 
     # Verificar se a pasta existe
     if not os.path.isdir(caminho_pasta):
         raise ValueError(f"A pasta especificada não existe: {caminho_pasta}")
 
     # Processar arquivos Word na pasta especificada
-    processar_arquivos_na_pasta(caminho_pasta)
+    processar_arquivos_na_pasta(caminho_pasta, caminho_destino)
